@@ -35,6 +35,25 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     model: agent?.model || '',
   });
 
+  // Fetch fresh agent data when modal opens (store data may be stale)
+  useEffect(() => {
+    if (!agent?.id) return;
+    let cancelled = false;
+    fetch(`/api/agents/${agent.id}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(fresh => {
+        if (cancelled || !fresh) return;
+        setForm(prev => ({
+          ...prev,
+          soul_md: fresh.soul_md || '',
+          user_md: fresh.user_md || '',
+          agents_md: fresh.agents_md || '',
+        }));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [agent?.id]);
+
   // Load available models from OpenClaw config
   useEffect(() => {
     const loadModels = async () => {

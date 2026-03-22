@@ -858,5 +858,11 @@ If Autensa has been useful to you, consider buying me a coffee!
 ---
 
 <p align="center">
+  <a href="https://discord.gg/TJ7GtMCx">
+    <img src="https://img.shields.io/badge/Join_Our_Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Our Discord" />
+  </a>
+</p>
+
+<p align="center">
   <strong>Stop managing a backlog. Start shipping on autopilot.</strong> 🚀
 </p>

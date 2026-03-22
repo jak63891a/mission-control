@@ -4,6 +4,7 @@ import { broadcast } from '@/lib/events';
 import { recordCostEvent } from '@/lib/costs/tracker';
 import { emitAutopilotActivity } from './activity';
 import { completeJSON } from './llm';
+import { batchCheckSimilarity, storeEmbedding, checkSimilarity } from './similarity';
 import type { Product, Idea, ResearchCycle, SwipeHistoryEntry } from '@/lib/types';
 
 function buildIdeationPrompt(
@@ -217,21 +218,71 @@ export async function storeIdeasFromPhaseData(
     'infrastructure', 'content', 'growth', 'monetization', 'operations', 'security'
   ]);
 
+  // --- Similarity Detection: batch-check all candidates before insertion ---
+  const candidates = ideasData.map((raw, index) => {
+    const idea = raw as Record<string, unknown>;
+    return {
+      title: String(idea.title || 'Untitled'),
+      description: String(idea.description || ''),
+      index,
+    };
+  });
+
+  let similarityResults: Map<number, ReturnType<typeof batchCheckSimilarity>[number]['result']>;
+  try {
+    const checks = batchCheckSimilarity(productId, candidates);
+    similarityResults = new Map(checks.map(c => [c.index, c.result]));
+  } catch (err) {
+    // If similarity check fails, continue without it — don't block ideation
+    console.error('[Similarity] Batch check failed, proceeding without dedup:', err);
+    similarityResults = new Map();
+  }
+
   let count = 0;
-  for (const raw of ideasData) {
+  let suppressed = 0;
+
+  for (let idx = 0; idx < ideasData.length; idx++) {
+    const raw = ideasData[idx];
     const idea = raw as Record<string, unknown>;
     const id = uuidv4();
     const now = new Date().toISOString();
     const rawCategory = String(idea.category || 'feature').toLowerCase().trim();
     const category = VALID_CATEGORIES.has(rawCategory) ? rawCategory : 'feature';
+    const title = String(idea.title || 'Untitled');
+    const description = String(idea.description || '');
+
+    // Check similarity result for this candidate
+    const simResult = similarityResults.get(idx);
+
+    // Auto-suppress if >90% similar to a rejected idea
+    if (simResult?.autoSuppress) {
+      suppressed++;
+      // Log suppression for audit trail
+      const topMatch = simResult.similarIdeas.find(s => s.status === 'rejected');
+      if (topMatch) {
+        run(
+          `INSERT INTO idea_suppressions (id, product_id, suppressed_title, suppressed_description, similar_to_idea_id, similarity_score, reason, ideation_cycle_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [uuidv4(), productId, title, description, topMatch.ideaId, topMatch.similarity, simResult.suppressReason || 'Auto-suppressed', ideationId, now]
+        );
+      }
+      emitAutopilotActivity({
+        productId, cycleId: ideationId, cycleType: 'ideation',
+        eventType: 'idea_suppressed',
+        message: `Idea auto-suppressed: ${title}`,
+        detail: simResult.suppressReason || 'Too similar to rejected idea',
+      });
+      console.log(`[Similarity] Auto-suppressed: "${title}" — ${simResult.suppressReason}`);
+      continue; // Skip insertion
+    }
 
     run(
-      `INSERT INTO ideas (id, product_id, cycle_id, title, description, category, research_backing, impact_score, feasibility_score, complexity, estimated_effort_hours, competitive_analysis, target_user_segment, revenue_potential, technical_approach, risks, tags, source, source_research, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'research', ?, ?, ?)`,
+      `INSERT INTO ideas (id, product_id, cycle_id, title, description, category, research_backing, impact_score, feasibility_score, complexity, estimated_effort_hours, competitive_analysis, target_user_segment, revenue_potential, technical_approach, risks, tags, source, source_research, similarity_flag, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'research', ?, ?, ?, ?)`,
       [
         id, productId, researchCycleId || null,
-        String(idea.title || 'Untitled'),
-        String(idea.description || ''),
+        title,
+        description,
         category,
         idea.research_backing ? String(idea.research_backing) : null,
         typeof idea.impact_score === 'number' ? idea.impact_score : null,
@@ -245,18 +296,37 @@ export async function storeIdeasFromPhaseData(
         Array.isArray(idea.risks) ? JSON.stringify(idea.risks) : null,
         Array.isArray(idea.tags) ? JSON.stringify(idea.tags) : null,
         idea.source_research ? JSON.stringify(idea.source_research) : null,
+        simResult?.similarityFlag || null,
         now, now
       ]
     );
 
+    // Store embedding for this new idea (for future comparisons)
+    try {
+      storeEmbedding(id, productId, title, description);
+    } catch (err) {
+      console.error(`[Similarity] Failed to store embedding for idea ${id}:`, err);
+    }
+
     emitAutopilotActivity({
       productId, cycleId: ideationId, cycleType: 'ideation',
       eventType: 'idea_stored',
-      message: `Idea stored: ${String(idea.title || 'Untitled')}`,
-      detail: String(idea.category || 'feature'),
+      message: `Idea stored: ${title}${simResult?.similarIdeas.length ? ` (⚠️ ${simResult.similarIdeas.length} similar)` : ''}`,
+      detail: category,
     });
 
     count++;
+  }
+
+  // Log suppression summary if any were suppressed
+  if (suppressed > 0) {
+    emitAutopilotActivity({
+      productId, cycleId: ideationId, cycleType: 'ideation',
+      eventType: 'dedup_summary',
+      message: `Deduplication: ${suppressed} ideas auto-suppressed (>90% similar to rejected)`,
+      detail: `${count} ideas stored, ${suppressed} duplicates removed`,
+    });
+    console.log(`[Similarity] Dedup summary: ${count} stored, ${suppressed} suppressed`);
   }
 
   // Phase: ideas_stored
@@ -352,9 +422,18 @@ export function createManualIdea(productId: string, input: {
   const id = uuidv4();
   const now = new Date().toISOString();
 
+  // Check similarity before inserting
+  let similarityFlag: string | null = null;
+  try {
+    const simResult = checkSimilarity(productId, input.title, input.description);
+    similarityFlag = simResult.similarityFlag || null;
+  } catch (err) {
+    console.error('[Similarity] Check failed for manual idea, proceeding:', err);
+  }
+
   run(
-    `INSERT INTO ideas (id, product_id, title, description, category, impact_score, feasibility_score, complexity, estimated_effort_hours, technical_approach, risks, tags, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?)`,
+    `INSERT INTO ideas (id, product_id, title, description, category, impact_score, feasibility_score, complexity, estimated_effort_hours, technical_approach, risks, tags, source, similarity_flag, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?)`,
     [
       id, productId, input.title, input.description, input.category,
       input.impact_score || null, input.feasibility_score || null,
@@ -362,9 +441,17 @@ export function createManualIdea(productId: string, input: {
       input.technical_approach || null,
       input.risks ? JSON.stringify(input.risks) : null,
       input.tags ? JSON.stringify(input.tags) : null,
+      similarityFlag,
       now, now
     ]
   );
+
+  // Store embedding for future comparisons
+  try {
+    storeEmbedding(id, productId, input.title, input.description);
+  } catch (err) {
+    console.error('[Similarity] Failed to store embedding for manual idea:', err);
+  }
 
   return queryOne<Idea>('SELECT * FROM ideas WHERE id = ?', [id])!;
 }

@@ -424,8 +424,35 @@ CREATE TABLE IF NOT EXISTS ideas (
   user_notes TEXT,
   resurfaced_from TEXT REFERENCES ideas(id),
   resurfaced_reason TEXT,
+  similarity_flag TEXT,
+  auto_suppressed INTEGER DEFAULT 0,
+  suppress_reason TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Idea embeddings: text embeddings for similarity detection
+CREATE TABLE IF NOT EXISTS idea_embeddings (
+  id TEXT PRIMARY KEY,
+  idea_id TEXT NOT NULL UNIQUE REFERENCES ideas(id) ON DELETE CASCADE,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  embedding TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Idea suppressions: audit log of auto-suppressed duplicate ideas
+CREATE TABLE IF NOT EXISTS idea_suppressions (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  suppressed_title TEXT NOT NULL,
+  suppressed_description TEXT NOT NULL,
+  similar_to_idea_id TEXT NOT NULL REFERENCES ideas(id),
+  similarity_score REAL NOT NULL,
+  reason TEXT NOT NULL,
+  ideation_cycle_id TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
 -- Swipe history: user decisions on ideas
@@ -689,4 +716,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_ports_active ON workspace_ports(status,
 CREATE INDEX IF NOT EXISTS idx_workspace_merges_task ON workspace_merges(task_id);
 CREATE INDEX IF NOT EXISTS idx_health_scores_product ON product_health_scores(product_id, calculated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_health_scores_snapshot ON product_health_scores(product_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_idea_embeddings_product ON idea_embeddings(product_id);
+CREATE INDEX IF NOT EXISTS idx_idea_embeddings_idea ON idea_embeddings(idea_id);
+CREATE INDEX IF NOT EXISTS idx_idea_suppressions_product ON idea_suppressions(product_id, created_at DESC);
 `;

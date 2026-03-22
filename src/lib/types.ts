@@ -572,6 +572,9 @@ export interface Idea {
   user_notes?: string;
   resurfaced_from?: string;
   resurfaced_reason?: string;
+  similarity_flag?: string; // JSON array of similar idea refs
+  auto_suppressed?: number; // 1 = suppressed due to similarity
+  suppress_reason?: string;
   created_at: string;
   updated_at: string;
 }

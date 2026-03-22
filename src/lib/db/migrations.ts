@@ -1361,7 +1361,6 @@ const migrations: Migration[] = [
     up: (db) => {
       console.log('[Migration 022] Adding product health scores table and weight config...');
 
-      // Create product_health_scores table for cached scores + daily snapshots
       db.exec(`
         CREATE TABLE IF NOT EXISTS product_health_scores (
           id TEXT PRIMARY KEY,
@@ -1380,7 +1379,6 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_health_scores_product ON product_health_scores(product_id, calculated_at DESC)`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_health_scores_snapshot ON product_health_scores(product_id, snapshot_date)`);
 
-      // Add health_weight_config JSON column to products table
       const productsInfo = db.prepare("PRAGMA table_info(products)").all() as { name: string }[];
       if (!productsInfo.some(col => col.name === 'health_weight_config')) {
         db.exec(`ALTER TABLE products ADD COLUMN health_weight_config TEXT`);
@@ -1388,6 +1386,55 @@ const migrations: Migration[] = [
       }
 
       console.log('[Migration 022] Product health scores table and indexes created');
+    }
+  },
+  {
+    id: '023',
+    name: 'add_idea_similarity_detection',
+    up: (db) => {
+      console.log('[Migration 023] Adding idea similarity detection tables and columns...');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS idea_embeddings (
+          id TEXT PRIMARY KEY,
+          idea_id TEXT NOT NULL UNIQUE REFERENCES ideas(id) ON DELETE CASCADE,
+          product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          embedding TEXT NOT NULL,
+          text_hash TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_embeddings_product ON idea_embeddings(product_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_embeddings_idea ON idea_embeddings(idea_id)`);
+
+      const ideasInfo = db.prepare("PRAGMA table_info(ideas)").all() as { name: string }[];
+      if (!ideasInfo.some(col => col.name === 'similarity_flag')) {
+        db.exec(`ALTER TABLE ideas ADD COLUMN similarity_flag TEXT`);
+      }
+      if (!ideasInfo.some(col => col.name === 'auto_suppressed')) {
+        db.exec(`ALTER TABLE ideas ADD COLUMN auto_suppressed INTEGER DEFAULT 0`);
+      }
+      if (!ideasInfo.some(col => col.name === 'suppress_reason')) {
+        db.exec(`ALTER TABLE ideas ADD COLUMN suppress_reason TEXT`);
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS idea_suppressions (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          suppressed_title TEXT NOT NULL,
+          suppressed_description TEXT NOT NULL,
+          similar_to_idea_id TEXT NOT NULL REFERENCES ideas(id),
+          similarity_score REAL NOT NULL,
+          reason TEXT NOT NULL,
+          ideation_cycle_id TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_suppressions_product ON idea_suppressions(product_id, created_at DESC)`);
+
+      console.log('[Migration 023] Idea similarity detection tables and columns created');
     }
   }
 ];

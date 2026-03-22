@@ -114,19 +114,36 @@ export function undoSwipe(productId: string, swipeId: string): { idea: Idea } {
     const idea = queryOne<Idea>('SELECT * FROM ideas WHERE id = ?', [swipe.idea_id]);
     if (!idea) throw new Error(`Idea ${swipe.idea_id} not found`);
 
-    // Rollback based on original action
+    // Restore idea to pending FIRST (clears task_id FK before task deletion)
+    run(
+      `UPDATE ideas SET status = 'pending', swiped_at = NULL, task_id = NULL, user_notes = NULL, updated_at = ? WHERE id = ?`,
+      [now, swipe.idea_id]
+    );
+
+    // Rollback side effects based on original action
     switch (swipe.action) {
       case 'approve':
       case 'fire': {
         // Delete the task that was created (if any)
         if (idea.task_id) {
-          // Delete task activities, deliverables, roles first (cascade should handle but be explicit)
+          // Clear any FK references from other tables pointing to this task
           run('DELETE FROM task_activities WHERE task_id = ?', [idea.task_id]);
           run('DELETE FROM task_deliverables WHERE task_id = ?', [idea.task_id]);
           run('DELETE FROM task_roles WHERE task_id = ?', [idea.task_id]);
           run('DELETE FROM task_notes WHERE task_id = ?', [idea.task_id]);
           run('DELETE FROM planning_questions WHERE task_id = ?', [idea.task_id]);
           run('DELETE FROM planning_specs WHERE task_id = ?', [idea.task_id]);
+          // Clear any other ideas that might reference this task
+          run('UPDATE ideas SET task_id = NULL WHERE task_id = ? AND id != ?', [idea.task_id, swipe.idea_id]);
+          // Clear workspace ports
+          run('DELETE FROM workspace_ports WHERE task_id = ?', [idea.task_id]);
+          // Clear workspace merges
+          run('DELETE FROM workspace_merges WHERE task_id = ?', [idea.task_id]);
+          // Clear events referencing this task
+          run('UPDATE events SET task_id = NULL WHERE task_id = ?', [idea.task_id]);
+          // Clear openclaw_sessions referencing this task
+          run('UPDATE openclaw_sessions SET task_id = NULL WHERE task_id = ?', [idea.task_id]);
+          // Now safe to delete the task
           run('DELETE FROM tasks WHERE id = ?', [idea.task_id]);
         }
         break;
@@ -141,12 +158,6 @@ export function undoSwipe(productId: string, swipeId: string): { idea: Idea } {
         break;
       }
     }
-
-    // Restore idea to pending
-    run(
-      `UPDATE ideas SET status = 'pending', swiped_at = NULL, task_id = NULL, user_notes = NULL, updated_at = ? WHERE id = ?`,
-      [now, swipe.idea_id]
-    );
 
     // Delete the swipe history record
     run('DELETE FROM swipe_history WHERE id = ?', [swipeId]);

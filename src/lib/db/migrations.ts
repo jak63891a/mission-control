@@ -1597,10 +1597,10 @@ const migrations: Migration[] = [
     }
   },
   {
-    id: '029',
+    id: '030',
     name: 'add_mcp_integrations',
     up: (db) => {
-      console.log('[Migration 029] Adding product_mcp_servers table...');
+      console.log('[Migration 030] Adding product_mcp_servers table...');
 
       db.exec(`
         CREATE TABLE IF NOT EXISTS product_mcp_servers (
@@ -1619,7 +1619,7 @@ const migrations: Migration[] = [
       `);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_product_mcp_servers_product ON product_mcp_servers(product_id, enabled)`);
 
-      console.log('[Migration 029] product_mcp_servers table created');
+      console.log('[Migration 030] product_mcp_servers table created');
     }
   }
 ];

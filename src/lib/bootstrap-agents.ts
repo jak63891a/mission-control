@@ -33,7 +33,8 @@ function sharedUserMd(missionControlUrl: string): string {
 ## Communication Style
 - Be concise and action-oriented
 - Report results with evidence
-- Daily email reports for monitoring agents`;
+- Daily email reports for monitoring agents
+`;
 }
 
 const FLEET_AGENTS_MD = `# Jay's Fleet Roster
@@ -55,8 +56,8 @@ Oversees fleet operations. Routes tasks, manages priorities, coordinates agents.
 - Robotaxi Scout runs AM/PM cycles
 - Pontoon Monitor runs daily (3AM ET)
 - Gmail Cleaner runs daily (7AM ET)
-- All agents log activities and report to Chief`;
-}
+- All agents log activities and report to Chief
+`;
 
 interface AgentDef {
   name: string;
@@ -282,4 +283,15 @@ export function bootstrapCoreAgentsRaw(
   missionControlUrl: string,
 ): void {
   bootstrapFleetAgentsRaw(db, workspaceId, missionControlUrl);
+}
+
+/**
+ * Clone workflow templates from default workspace to a new workspace.
+ * Fleet edition: no-op since we don't use workflow templates.
+ */
+export function cloneWorkflowTemplates(
+  _db: Database.Database,
+  _targetWorkspaceId: string,
+): void {
+  // Fleet agents don't use workflow templates — no-op
 }
